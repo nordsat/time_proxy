@@ -58,7 +58,6 @@ async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list
 async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
     """Worker function to fetch a single timestep asynchronously"""
     r = await client.get(url, params=params)
-    print("Fetching cached image:", r.extensions.get("hishel_from_cache", False))
     if r.status_code == 200:
         return r.content
     return None
