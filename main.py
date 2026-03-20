@@ -6,13 +6,15 @@ from PIL import Image
 from defusedxml.ElementTree import fromstring
 from io import BytesIO
 from cache import AsyncTTL
+import os
 
 from fastapi.middleware.cors import CORSMiddleware
+from hishel.httpx import AsyncCacheClient
 
 # Find the final URL to avoid the 302 redirect
-SERVER = "https://wms-proxy-staging.int-nordmet-nordsat.s.ewcloud.host/viirs/"
-CAP_STRING = "?REQUEST=GetCapabilities&SERVICE=WMS&VERSION=1.3.0"
+SERVER = os.environ.get("WMS_SERVER", "http://localhost:8999")
 
+CAP_STRING = "?REQUEST=GetCapabilities&SERVICE=WMS&VERSION=1.3.0"
 
 app = FastAPI()
 app.add_middleware(
@@ -56,17 +58,19 @@ async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
         return Image.open(BytesIO(r.content))
     return None
 
-@app.get("/wms-proxy")
-@app.get("/wms-proxy/")
+@app.get("/1h")
+@app.get("/1h/")
 async def wms_proxy(request: Request):
     request_params = dict(request.query_params)
     request_type = request_params.get("REQUEST", "").lower()
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with AsyncCacheClient(timeout=10.0) as client:
 
         if request_type != "getmap":
             r = await client.get(SERVER, params=request_params)
-            return Response(r.content, status_code=r.status_code)
+            server = b"https://wms-proxy-staging.int-nordmet-nordsat.s.ewcloud.host/viirs/"
+            content = r.content.replace(server, server + b"1h/")
+            return Response(content, status_code=r.status_code)
 
         requested_time_str = request_params.get("TIME", "")
         requested_layer = request_params.get("LAYERS", "")

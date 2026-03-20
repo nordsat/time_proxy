@@ -11,4 +11,5 @@ dependencies = [
     "defusedxml",
     "httpx",
     "async_cache",
+    "hishel[httpx]"
 ]
