@@ -1,0 +1,14 @@
+[project]
+name = "time-proxy"
+version = "0.1.0"
+description = "A hack to get mosaics out of mapserver"
+readme = "README.md"
+requires-python = ">=3.11.8"
+dependencies = [
+    "fastapi",
+    "uvicorn", 
+    "Pillow",
+    "defusedxml",
+    "httpx",
+    "async_cache",
+]
