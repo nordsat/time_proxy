@@ -8,6 +8,7 @@ from io import BytesIO
 from cache import AsyncTTL
 import os
 
+import re
 from fastapi.middleware.cors import CORSMiddleware
 from hishel.httpx import AsyncCacheClient
 import hishel
@@ -79,9 +80,28 @@ def assemble_images(image_bytes_list: list[bytes]) -> bytes:
     base.save(img_byte_arr, format='PNG')
     return img_byte_arr.getvalue()
 
-@app.get("/1h")
-@app.get("/1h/")
-async def wms_proxy(request: Request):
+
+def parse_duration(duration_str: str) -> timedelta:
+    """Translates strings like '30m', '2h', '1d' into a timedelta object."""
+    match = re.match(r"^(\d+)([mhd])$", duration_str.lower())
+    if not match:
+        # Default fallback if the user types nonsense
+        return timedelta(hours=1) 
+    
+    value, unit = int(match.group(1)), match.group(2)
+    
+    if unit == 'm':
+        return timedelta(minutes=value)
+    if unit == 'h':
+        return timedelta(hours=value)
+    if unit == 'd':
+        return timedelta(days=value)
+    
+    return timedelta(hours=1)
+
+@app.get("/{duration_str}")
+@app.get("/{duration_str}/")
+async def wms_proxy(duration_str: str, request: Request):
     request_params = dict(request.query_params)
     request_type = request_params.get("REQUEST", "").lower()
 
@@ -90,7 +110,7 @@ async def wms_proxy(request: Request):
         if request_type != "getmap":
             r = await client.get(SERVER, params=request_params)
             server = b"https://wms-proxy-staging.int-nordmet-nordsat.s.ewcloud.host/viirs/"
-            content = r.content.replace(server, server + b"1h/")
+            content = r.content.replace(server, server + duration_str.encode() + b"/")
             return Response(content, status_code=r.status_code)
 
         requested_time_str = request_params.get("TIME", "")
@@ -105,9 +125,10 @@ async def wms_proxy(request: Request):
         time_steps = await get_timesteps(client, requested_layer)
 
     async with AsyncCacheClient(storage=cache_storage, policy=policy, timeout=10.0) as client:
+        duration = parse_duration(duration_str)
         fetch_tasks = []
         for t in time_steps:
-            if requested_time - timedelta(hours=1) <= t <= requested_time:
+            if requested_time - duration <= t <= requested_time:
                 params = request_params.copy()
                 params["TIME"] = t.isoformat()
 
