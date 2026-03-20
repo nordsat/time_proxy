@@ -86,7 +86,7 @@ async def wms_proxy(request: Request):
     request_params = dict(request.query_params)
     request_type = request_params.get("REQUEST", "").lower()
 
-    async with AsyncCacheClient(storage=cache_storage, policy=policy, timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
 
         if request_type != "getmap":
             r = await client.get(SERVER, params=request_params)
@@ -105,6 +105,7 @@ async def wms_proxy(request: Request):
 
         time_steps = await get_timesteps(client, requested_layer)
 
+    async with AsyncCacheClient(storage=cache_storage, policy=policy, timeout=10.0) as client:
         fetch_tasks = []
         for t in time_steps:
             if requested_time - timedelta(hours=1) <= t <= requested_time:
