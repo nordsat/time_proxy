@@ -10,11 +10,15 @@ import os
 
 from fastapi.middleware.cors import CORSMiddleware
 from hishel.httpx import AsyncCacheClient
+import hishel
 
 # Find the final URL to avoid the 302 redirect
 SERVER = os.environ.get("WMS_SERVER", "http://localhost:8999")
 
 CAP_STRING = "?REQUEST=GetCapabilities&SERVICE=WMS&VERSION=1.3.0"
+
+cache_storage = hishel.AsyncSqliteStorage(default_ttl=3600)
+policy = hishel.FilterPolicy()
 
 app = FastAPI()
 app.add_middleware(
@@ -54,9 +58,27 @@ async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list
 async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
     """Worker function to fetch a single timestep asynchronously"""
     r = await client.get(url, params=params)
+    print("Fetching cached image:", r.extensions.get("hishel_from_cache", False))
     if r.status_code == 200:
-        return Image.open(BytesIO(r.content))
+        return r.content
     return None
+
+def assemble_images(image_bytes_list: list[bytes]) -> bytes:
+    """Synchronous CPU-bound function to process images."""
+    if not image_bytes_list:
+        return b""
+
+    # Load and convert all images into memory inside the thread
+    images = [Image.open(BytesIO(b)).convert("RGBA") for b in image_bytes_list]
+    
+    base = images[0]
+    for img in images[1:]:
+        base = Image.alpha_composite(base, img)
+
+    img_byte_arr = BytesIO()
+    # optimize=False is the default, but explicitly keeping it off ensures faster saving 
+    base.save(img_byte_arr, format='PNG')
+    return img_byte_arr.getvalue()
 
 @app.get("/1h")
 @app.get("/1h/")
@@ -64,7 +86,7 @@ async def wms_proxy(request: Request):
     request_params = dict(request.query_params)
     request_type = request_params.get("REQUEST", "").lower()
 
-    async with AsyncCacheClient(timeout=10.0) as client:
+    async with AsyncCacheClient(storage=cache_storage, policy=policy, timeout=10.0) as client:
 
         if request_type != "getmap":
             r = await client.get(SERVER, params=request_params)
@@ -91,18 +113,13 @@ async def wms_proxy(request: Request):
 
                 fetch_tasks.append(fetch_image(client, SERVER, params))
 
-        downloaded_images = await asyncio.gather(*fetch_tasks)
+        downloaded_image_bytes = await asyncio.gather(*fetch_tasks)
 
     # Filter out any failed downloads (None values)
-    valid_images = [img for img in downloaded_images if img is not None]
+    valid_images_bytes = [img for img in downloaded_image_bytes if img is not None]
 
-    if not valid_images:
+    if not valid_images_bytes:
         return Response("No valid data found for the requested time range.", status_code=404)
 
-    base = valid_images[0].convert("RGBA")
-    for img in valid_images[1:]:
-        base = Image.alpha_composite(base, img.convert("RGBA"))
-
-    img_byte_arr = BytesIO()
-    base.save(img_byte_arr, format='PNG')
-    return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    final_image_payload = await asyncio.to_thread(assemble_images, valid_images_bytes)
+    return Response(content=final_image_payload, media_type="image/png")
