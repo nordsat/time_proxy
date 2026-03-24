@@ -96,14 +96,14 @@ def assemble_images_lazy(image_bytes_iterable: list[bytes]) -> bytes:
 
     # We need to go newest -> oldest
     reversed_bytes = reversed(image_bytes_iterable)
-    
+
     canvas = None
     missing_mask = None
 
     for b in reversed_bytes:
         # Load one image at a time
         img_array = np.asarray(Image.open(BytesIO(b)).convert("RGBA"))
-        
+
         if canvas is None:
             # Initialize canvas with the latest image
             canvas = img_array.copy()
@@ -112,7 +112,7 @@ def assemble_images_lazy(image_bytes_iterable: list[bytes]) -> bytes:
         else:
             # Update the canvas with the older image
             still_has_holes = update_canvas(canvas, missing_mask, img_array)
-            
+
             # Efficiency: If the canvas is fully opaque, stop fetching/processing
             if not still_has_holes:
                 break
