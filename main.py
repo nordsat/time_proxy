@@ -184,5 +184,5 @@ async def wms_proxy(duration_str: str, request: Request):
     if not valid_images_bytes:
         return Response("No valid data found for the requested time range.", status_code=404)
 
-    final_image_payload = await asyncio.to_thread(assemble_images, valid_images_bytes)
+    final_image_payload = await asyncio.to_thread(assemble_images_lazy, valid_images_bytes)
     return Response(content=final_image_payload, media_type="image/png")
