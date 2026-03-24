@@ -61,10 +61,14 @@ async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list
     return []
 
 async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
-    """Worker function to fetch a single timestep asynchronously"""
     r = await client.get(url, params=params)
-    if r.status_code == 200:
+    # Check if the response is actually an image
+    content_type = r.headers.get("Content-Type", "")
+    if r.status_code == 200 and "image" in content_type:
         return r.content
+    # If we get here, it's either not a 200 or it's an XML error
+    if "xml" in content_type:
+        print(f"WMS Error for time {params.get('TIME')}: {r.text[:100]}...")
     return None
 
 
@@ -101,7 +105,11 @@ def assemble_images_lazy(image_bytes_iterable: list[bytes]) -> bytes:
 
     for b in reversed_bytes:
         # Load one image at a time
-        img_array = np.asarray(Image.open(BytesIO(b)).convert("RGBA"))
+        try:
+            img_array = np.asarray(Image.open(BytesIO(b)).convert("RGBA"))
+        except Exception:
+            # Print the first 200 characters of the non-image data
+            print(f"MapServer sent this instead of an image: {b[:200]}")
 
         if canvas is None:
             # Initialize canvas with the latest image
