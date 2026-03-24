@@ -8,6 +8,9 @@ from io import BytesIO
 from cache import AsyncTTL
 import os
 
+import numpy as np
+from numba import njit
+
 import re
 from fastapi.middleware.cors import CORSMiddleware
 from hishel.httpx import AsyncCacheClient
@@ -33,6 +36,7 @@ app.add_middleware(
 async def get_capabilities(client: httpx.AsyncClient):
     return await client.get(SERVER + CAP_STRING)
 
+@AsyncTTL(time_to_live=60, skip_args=1)
 async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list[datetime]:
     r_cap = await get_capabilities(client)
 
@@ -56,6 +60,7 @@ async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list
 
     return []
 
+@AsyncTTL(time_to_live=60, skip_args=1)
 async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
     """Worker function to fetch a single timestep asynchronously"""
     r = await client.get(url, params=params)
@@ -63,21 +68,59 @@ async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
         return r.content
     return None
 
-def assemble_images(image_bytes_list: list[bytes]) -> bytes:
-    """Synchronous CPU-bound function to process images."""
-    if not image_bytes_list:
+
+@njit
+def update_canvas(canvas, missing_mask, new_img):
+    """
+    Updates the canvas only where missing_mask is True 
+    and the new_img has valid data (alpha > 0).
+    """
+    h, w, c = canvas.shape
+    for y in range(h):
+        for x in range(w):
+            if missing_mask[y, x]:
+                # If current image has data, fill the hole
+                if new_img[y, x, 3] > 0:
+                    for k in range(c):
+                        canvas[y, x, k] = new_img[y, x, k]
+                    # This pixel is no longer missing
+                    missing_mask[y, x] = False
+    return np.any(missing_mask) # Return True if we still have holes
+
+def assemble_images_lazy(image_bytes_iterable: list[bytes]) -> bytes:
+    """
+    Processes images one by one from latest to oldest.
+    """
+    if not image_bytes_iterable:
         return b""
 
-    # Load and convert all images into memory inside the thread
-    images = [Image.open(BytesIO(b)).convert("RGBA") for b in image_bytes_list]
+    # We need to go newest -> oldest
+    reversed_bytes = reversed(image_bytes_iterable)
     
-    base = images[0]
-    for img in images[1:]:
-        base = Image.alpha_composite(base, img)
+    canvas = None
+    missing_mask = None
 
+    for b in reversed_bytes:
+        # Load one image at a time
+        img_array = np.asarray(Image.open(BytesIO(b)).convert("RGBA"))
+        
+        if canvas is None:
+            # Initialize canvas with the latest image
+            canvas = img_array.copy()
+            # Initialize mask: True where alpha is 0
+            missing_mask = (canvas[:, :, 3] == 0)
+        else:
+            # Update the canvas with the older image
+            still_has_holes = update_canvas(canvas, missing_mask, img_array)
+            
+            # Efficiency: If the canvas is fully opaque, stop fetching/processing
+            if not still_has_holes:
+                break
+
+    # Convert back to bytes
+    final_img = Image.fromarray(canvas, "RGBA")
     img_byte_arr = BytesIO()
-    # optimize=False is the default, but explicitly keeping it off ensures faster saving 
-    base.save(img_byte_arr, format='PNG')
+    final_img.save(img_byte_arr, format='PNG', optimize=False)
     return img_byte_arr.getvalue()
 
 
