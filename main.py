@@ -156,7 +156,7 @@ def parse_duration(duration_str: str) -> timedelta:
 @app.get("/{duration_str}/")
 async def wms_proxy(duration_str: str, request: Request):
     request_params = dict(request.query_params)
-    request_type = request_params.get("REQUEST", "").lower()
+    request_type = request_params.get("REQUEST", request_params.get("request", "")).lower()
 
     async with httpx.AsyncClient(timeout=10.0) as client:
 
@@ -202,7 +202,6 @@ async def wms_proxy(duration_str: str, request: Request):
 
 def simplify_capabilities_xml(xml_bytes: bytes, interval_min: int = 10) -> bytes:
     ns = {'wms': 'http://www.opengis.net/wms'}
-    DET.register_namespace('', ns['wms'])
     root = DET.fromstring(xml_bytes)
 
     for layer in root.findall(".//wms:Layer", ns):
