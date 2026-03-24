@@ -200,14 +200,14 @@ async def wms_proxy(duration_str: str, request: Request):
     final_image_payload = await asyncio.to_thread(assemble_images_lazy, valid_images_bytes)
     return Response(content=final_image_payload, media_type="image/png")
 
-def simplify_capabilities_xml(xml_bytes: bytes, layer_name: str, interval_min: int = 10) -> bytes:
+def simplify_capabilities_xml(xml_bytes: bytes, interval_min: int = 10) -> bytes:
     ns = {'wms': 'http://www.opengis.net/wms'}
     DET.register_namespace('', ns['wms'])
     root = DET.fromstring(xml_bytes)
 
     for layer in root.findall(".//wms:Layer", ns):
         name_node = layer.find("wms:Name", ns)
-        if name_node is not None and name_node.text == layer_name:
+        if name_node is not None:
             dim = layer.find("./wms:Dimension[@name='time']", ns)
             if dim is not None and dim.text:
                 raw_times = sorted([t.strip() for t in dim.text.split(",")])
