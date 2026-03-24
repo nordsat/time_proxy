@@ -200,33 +200,38 @@ async def wms_proxy(duration_str: str, request: Request):
     final_image_payload = await asyncio.to_thread(assemble_images_lazy, valid_images_bytes)
     return Response(content=final_image_payload, media_type="image/png")
 
-def simplify_capabilities_xml(xml_bytes: bytes, interval_min: int = 10) -> bytes:
-    """
-    Intersects the GetCapabilities XML to replace a comma-separated 
-    list of times with a start/end/period interval.
-    """
-    # WMS 1.3.0 Namespace
+def simplify_capabilities_xml(xml_bytes: bytes, layer_name: str, interval_min: int = 10) -> bytes:
     ns = {'wms': 'http://www.opengis.net/wms'}
-    # Ensure namespaces don't get 'ns0' prefixes in the output
     DET.register_namespace('', ns['wms'])
-
-    # Parse securely
     root = DET.fromstring(xml_bytes)
 
     for layer in root.findall(".//wms:Layer", ns):
         name_node = layer.find("wms:Name", ns)
-        if name_node is not None:
-            # Find the time dimension specifically
+        if name_node is not None and name_node.text == layer_name:
             dim = layer.find("./wms:Dimension[@name='time']", ns)
             if dim is not None and dim.text:
-                # Extract the actual data points
-                raw_times = [t.strip() for t in dim.text.split(",")]
+                raw_times = sorted([t.strip() for t in dim.text.split(",")])
                 if len(raw_times) > 1:
-                    # Determine the absolute range
-                    start = raw_times[0]
-                    end = raw_times[-1]
-                    # Rewrite as an ISO 8601 Interval (Start/End/Period)
-                    # This tells the client: "Stop asking for every minute."
-                    dim.text = f"{start}/{end}/PT{interval_min}M"
-    # Return as bytes for the Response object
+                    # Parse the actual start/end from MapServer
+                    # replace('Z', '+00:00') handles the ISO format for Python's fromisoformat
+                    dt_start = datetime.fromisoformat(raw_times[0].replace('Z', '+00:00'))
+                    dt_end = datetime.fromisoformat(raw_times[-1].replace('Z', '+00:00'))
+
+                    # Snap to the grid
+                    snapped_start = floor_datetime(dt_start, interval_min)
+                    snapped_end = floor_datetime(dt_end, interval_min)
+
+                    # Return to ISO 8601 strings
+                    # We use 'Z' to keep WMS clients happy
+                    start_str = snapped_start.strftime("%Y-%m-%dT%H:%M:00Z")
+                    end_str = snapped_end.strftime("%Y-%m-%dT%H:%M:00Z")
+                    
+                    dim.text = f"{start_str}/{end_str}/PT{interval_min}M"
+    
     return DET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+def floor_datetime(dt: datetime, interval_min: int) -> datetime:
+    """Floors a datetime to the nearest interval (e.g., 10, 15, 30 min)."""
+    # Calculate how many minutes to subtract
+    discard_minutes = dt.minute % interval_min
+    return dt.replace(minute=dt.minute - discard_minutes, second=0, microsecond=0)
