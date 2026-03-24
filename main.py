@@ -60,7 +60,6 @@ async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list
 
     return []
 
-@AsyncTTL(time_to_live=60, skip_args=1)
 async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
     """Worker function to fetch a single timestep asynchronously"""
     r = await client.get(url, params=params)
