@@ -62,13 +62,18 @@ async def get_timesteps(client: httpx.AsyncClient, requested_layer: str) -> list
 
 async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
     r = await client.get(url, params=params)
-    # Check if the response is actually an image
     content_type = r.headers.get("Content-Type", "")
+
     if r.status_code == 200 and "image" in content_type:
+        # skip empty images
+        if len(r.content) < 15000:
+            return None
+
         return r.content
-    # If we get here, it's either not a 200 or it's an XML error
+
     if "xml" in content_type:
-        print(f"WMS Error for time {params.get('TIME')}: {r.text[:100]}...")
+        print(f"WMS Error: {r.text[:100]}")
+
     return None
 
 
