@@ -4,6 +4,8 @@ from fastapi import FastAPI, Response, Request
 import httpx
 from PIL import Image
 from defusedxml.ElementTree import fromstring
+import defusedxml.ElementTree as DET
+
 from io import BytesIO
 from cache import AsyncTTL
 import os
@@ -79,10 +81,7 @@ async def fetch_image(client: httpx.AsyncClient, url: str, params: dict):
 
 @njit
 def update_canvas(canvas, missing_mask, new_img):
-    """
-    Updates the canvas only where missing_mask is True 
-    and the new_img has valid data (alpha > 0).
-    """
+    """Update the canvas only where missing_mask is True  and the new_img has valid data (alpha > 0)."""
     h, w, c = canvas.shape
     for y in range(h):
         for x in range(w):
@@ -95,10 +94,9 @@ def update_canvas(canvas, missing_mask, new_img):
                     missing_mask[y, x] = False
     return np.any(missing_mask) # Return True if we still have holes
 
+
 def assemble_images_lazy(image_bytes_iterable: list[bytes]) -> bytes:
-    """
-    Processes images one by one from latest to oldest.
-    """
+    """Process images one by one from latest to oldest."""
     if not image_bytes_iterable:
         return b""
 
@@ -166,6 +164,8 @@ async def wms_proxy(duration_str: str, request: Request):
             r = await client.get(SERVER, params=request_params)
             server = b"https://wms-proxy-staging.int-nordmet-nordsat.s.ewcloud.host/viirs/"
             content = r.content.replace(server, server + duration_str.encode() + b"/")
+            if request_type == "getcapabilities":
+                content = simplify_capabilities_xml(content)
             return Response(content, status_code=r.status_code)
 
         requested_time_str = request_params.get("TIME", "")
@@ -199,3 +199,34 @@ async def wms_proxy(duration_str: str, request: Request):
 
     final_image_payload = await asyncio.to_thread(assemble_images_lazy, valid_images_bytes)
     return Response(content=final_image_payload, media_type="image/png")
+
+def simplify_capabilities_xml(xml_bytes: bytes, interval_min: int = 10) -> bytes:
+    """
+    Intersects the GetCapabilities XML to replace a comma-separated 
+    list of times with a start/end/period interval.
+    """
+    # WMS 1.3.0 Namespace
+    ns = {'wms': 'http://www.opengis.net/wms'}
+    # Ensure namespaces don't get 'ns0' prefixes in the output
+    DET.register_namespace('', ns['wms'])
+
+    # Parse securely
+    root = DET.fromstring(xml_bytes)
+
+    for layer in root.findall(".//wms:Layer", ns):
+        name_node = layer.find("wms:Name", ns)
+        if name_node is not None:
+            # Find the time dimension specifically
+            dim = layer.find("./wms:Dimension[@name='time']", ns)
+            if dim is not None and dim.text:
+                # Extract the actual data points
+                raw_times = [t.strip() for t in dim.text.split(",")]
+                if len(raw_times) > 1:
+                    # Determine the absolute range
+                    start = raw_times[0]
+                    end = raw_times[-1]
+                    # Rewrite as an ISO 8601 Interval (Start/End/Period)
+                    # This tells the client: "Stop asking for every minute."
+                    dim.text = f"{start}/{end}/PT{interval_min}M"
+    # Return as bytes for the Response object
+    return DET.tostring(root, encoding='utf-8', xml_declaration=True)
